@@ -1,7 +1,6 @@
 import json
 from ctypes import *
 from io import UnsupportedOperation
-from can.interfaces import slcan
 
 clib = CDLL("libpyandroidserial.so")
 clib.usb_host_supported.restype = c_bool
@@ -18,7 +17,7 @@ clib.usb_write.restype = c_int
 clib.usb_read.argtypes = [POINTER(c_char), c_int, c_int]
 clib.usb_read.restype = c_int
 
-def _android_serial_for_url(*args, **kwargs):
+def android_serial_for_url(*args, **kwargs):
     return AndroidSerial(*args, **kwargs)
 
 def usb_host_supported_on_android() -> bool:
