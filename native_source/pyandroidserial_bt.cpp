@@ -43,8 +43,10 @@ const char* bt_get_paired_devices() {
     result.clear();
 
     // Android 12+: BLUETOOTH_CONNECT permission is needed.
-    if (!bt_has_connect_permission())
-        return result.constData();
+    if (!bt_has_connect_permission()) {
+        bt_request_connect_permission();
+        return "[]"; // empty json format
+    }
 
     QJniObject adapter = QJniObject::callStaticObjectMethod(
         "android/bluetooth/BluetoothAdapter",
