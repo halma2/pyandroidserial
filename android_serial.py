@@ -127,6 +127,12 @@ class AndroidSerial:
     def fileno(self):
          raise UnsupportedOperation("Android USB device has no POSIX file descriptor")
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
 
 def is_bluetooth_device(name) -> bool:
     return name.startswith("bt://")
