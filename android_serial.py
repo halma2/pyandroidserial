@@ -143,8 +143,8 @@ def android_bluetooth_permission_granted():
 def android_bluetooth_request_permission():
     clib.bt_request_connect_permission()
 
-def get_bt_mac_address(port: str) -> str:
-    return port[5:] if is_bluetooth_device(port) else port
+def get_bt_mac_address(port: str) -> str | None:
+    return port[5:] if is_bluetooth_device(port) else None
 
 def android_bluetooth_get_device_class(port: str) -> int:
     return clib.bt_get_device_class(get_bt_mac_address(port).encode('ascii'))
