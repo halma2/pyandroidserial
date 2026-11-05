@@ -3,7 +3,7 @@ import sys
 # only works on andorid:
 if hasattr(sys, "getandroidapilevel"):
   import time
-  import canopen_app.android_serial as android_usb
+  import android_serial as android_usb
   from can.interfaces import slcan
   import can
 
