@@ -2,7 +2,7 @@ import sys
 
 if hasattr(sys, "getandroidapilevel"):
     import time
-    import canopen_app.android_serial as android_ser
+    import android_serial as android_ser
     from can.interfaces import slcan
     import can
     slcan.serial.serial_for_url = android_ser.android_serial_for_url # monkey-patch
