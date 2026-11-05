@@ -1,5 +1,6 @@
 #ifndef PYANDROIDSERIAL_H
 #define PYANDROIDSERIAL_H
+
 #pragma once
 
 #ifdef _WIN32
@@ -8,7 +9,14 @@
 #define EXPORT
 #endif
 
-///build: Qt_6_11_1_for_Android_arm64_v8a_Debug
+#include <cstddef>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <deque>
+#include <condition_variable>
+
+using namespace std;
 
 extern "C"
 {
@@ -23,7 +31,19 @@ extern "C"
     EXPORT int usb_read(char* buffer, int maxlen, int timeoutMs);
     EXPORT void usb_clear_rx_buffer();
     EXPORT void usb_close();
-    EXPORT const char* usb_last_error();
 }
+
+// global variables that pyandroidserial_bt.cpp uses:
+constexpr size_t MAX_RX_BUFFER = 1024 * 1024;
+bool clearJniException();
+int rxRead(char* buffer, int maxLen, int timeoutMs);
+int rxBufferAvailable();
+void clearRxBuffer();
+inline mutex g_rxMutex;
+inline thread g_rxThread;
+inline atomic<bool> g_rxRunning{false};
+inline deque<char> g_rxBuffer;
+inline condition_variable g_rxCv;
+inline bool g_rxError = false;
 
 #endif // PYANDROIDSERIAL_H

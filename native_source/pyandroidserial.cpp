@@ -1,31 +1,24 @@
 #include "pyandroidserial.h"
 #include <QJniObject>
-#include <mutex>
-#include <vector>
-#include <condition_variable>
-#include <thread>
-#include <atomic>
-using namespace std;
+#include <algorithm>
+#include <QJsonArray>
 
 QJniObject g_connection;
 QJniObject g_device;
 QJniObject g_outEndpoint;
 QJniObject g_inEndpoint;
 QJniObject g_interface;
-vector<char> g_rxBuffer;
-mutex g_rxMutex;
-condition_variable g_rxCv;
-atomic<bool> g_rxRunning{false};
-thread g_rxThread;
 
-class UsbException : public runtime_error {
-public:
-    explicit UsbException(const string& msg): runtime_error(msg) {}
-};
-
-void checkValid(const QJniObject& obj, const char* msg) {
-    if (!obj.isValid())
-        throw UsbException(msg);
+/* It states whether there was an exception,
+ * if there were, it logs and clear them all
+ */
+bool clearJniException() {
+    QJniEnvironment env;
+    if (!env->ExceptionCheck())
+        return false;
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    return true;
 }
 
 bool usb_host_supported() {
@@ -120,15 +113,15 @@ bool usb_valid_device(const char* name) {
 }
 
 /**
- * @brief Kilistázza az összes csatlakoztarott USB eszköz listáját.
- * @return "["dev1","dev2",..."devN",]" JSON format
- * @warning Nem szálbiztos, static string-ben tárolja:
- * (a memóriája csak a program leállásakor szabadul fel)
+ * @brief Discover and lit all connected USB devices.
+ * @return The lsit of device names in JSON format
  */
 const char* usb_get_all_device_names() {
-    static string name_list;
-    name_list.clear();
-    name_list += "[";
+    // this pointer will be stored until the next call in this thread
+    static thread_local QByteArray result;
+    result.clear();
+    QJsonArray jsonArray;
+
     QJniObject iterator = getDeviceIterator();
     while (iterator.callMethod<jboolean>(
         "hasNext",
@@ -142,13 +135,10 @@ const char* usb_get_all_device_names() {
             "()Ljava/lang/String;");
 
         QByteArray lastName = dev_name.toString().toUtf8();
-        name_list += '"';
-        name_list += lastName.constData();
-        name_list += "\",";
+        jsonArray.append(dev_name.toString());
     }
-    name_list.pop_back(); // JSON format: remove last trailing comma (',')
-    name_list += ']';
-    return name_list.c_str();
+    result = QJsonDocument(jsonArray).toJson(QJsonDocument::Compact);
+    return result.constData();
 }
 
 bool usb_has_permission(const char* name) {
@@ -202,10 +192,10 @@ bool usb_request_permission(const char* name) {
 }
 
 /**
- * A g_device USB minden interface-ét és azok végpontjait nézi meg.
- * Megkeresi a ki és bemeneti végpontokat és azokat globál változókban tárolja.
- * (Bemenet: {type: Bulk (transfer), direction: in;
- * Kimenet: {type: Bulk(transfer), direction: out})
+ * It searches for the g_device's all interfaces and those endpoints.
+ * In those it searches for the in and output endpoints and stores them in global.
+ * (Input: {type: Bulk (transfer), direction: in;
+ * Output: {type: Bulk(transfer), direction: out})
  */
 bool scanInterfaces() {
     if (!g_device.isValid())
@@ -278,29 +268,28 @@ bool scanInterfaces() {
 }
 
 /**
- * @brief Androidon meghív egy bulk transfer olvasást, melyet a bufferben tárol el.
- * @param buffer: ideiglenes (az őt hívó usb_reader_thread 4096 hosszú).
+ * @brief In Android, it calls a bulk transfer read which result will be stroed in a buffer.
+ * @param buffer: temporary (the length of the calling usbReaderThread buffer is 4096).
  * @param maxlen
  * @param timeoutMs
- * @return beérkező adat hossza
+ * @return lenght of the incoming data
  */
-int usb_bulk_read(char* buffer, int maxlen, int timeoutMs) {
-    if (!g_connection.isValid() || !g_inEndpoint.isValid())
+int usb_bulk_read(jbyteArray arr, char* buffer, int maxLen, int timeoutMs) {
+    if (!g_connection.isValid() || !g_inEndpoint.isValid() || !arr || maxLen <= 0)
         return -1;
 
     QJniEnvironment env;
-    jbyteArray arr = env->NewByteArray(maxlen);
-    if (!arr)
-        return -1;
-
 
     jint received = g_connection.callMethod<jint>(
         "bulkTransfer",
         "(Landroid/hardware/usb/UsbEndpoint;[BII)I",
         g_inEndpoint.object(),
         arr,
-        maxlen,
+        maxLen,
         timeoutMs);
+
+    if (clearJniException())
+        return -1;
 
     if (received > 0) {
         env->GetByteArrayRegion(
@@ -308,46 +297,66 @@ int usb_bulk_read(char* buffer, int maxlen, int timeoutMs) {
             0,
             received,
             reinterpret_cast<jbyte *>(buffer));
+
+        if (clearJniException())
+            return -1;
     }
-    env->DeleteLocalRef(arr);
     return received;
 }
 
 /**
- * 10 ms-ként bulk transfer olvasást kezdeményez, melyhez ideiglenesen egy 4 KB os tömböt használ.
- * Ha érkezett adat, akkor azt a beérkező adatmennyiséget a globál buffer végébe tölti.
- * Adat beérkezéskor a g_rxCV változóval jelzi, hogy a globál buffer olvasható.
- * Addig olvas, míg a kapcsolat nem lesz bontva: usb_close -> g_rxRunning = false;
+ * It calls a bulk transfer read every 10 ms, which it uses a 4KB buffer.
+ * If new data does not arrive, then it loads the previously arrived datas into the end of the buffer.
+ * When data arrives, it flags with g_rxCV which says that the global buffer can be read.
+ * It reads until connection is broken: usb_close -> g_rxRunning = false;
  */
-void usb_reader_thread() {
-    char temp[4096];
+void usbReaderThread() {
+    constexpr int BUFFER_SIZE = 4096;
+    char temp[BUFFER_SIZE];
 
+    QJniEnvironment env;
+    jbyteArray javaBuffer = env->NewByteArray(BUFFER_SIZE);
+    bool jniError = clearJniException();
+    if (!javaBuffer || jniError) {
+        {
+            lock_guard<mutex> lock(g_rxMutex);
+            g_rxError = true;
+        }
+        g_rxRunning = false;
+        g_rxCv.notify_all();
+        return;
+    }
     while (g_rxRunning) {
-        int received = usb_bulk_read(temp, sizeof(temp), 10);
+        int received = usb_bulk_read(javaBuffer, temp, sizeof(temp), 10);
         if (received > 0) {
             {
                 lock_guard<mutex> lock(g_rxMutex);
+
+                if (received > MAX_RX_BUFFER - g_rxBuffer.size()) {
+                    g_rxError = true;
+                    g_rxCv.notify_all();
+                    break;
+                }
                 g_rxBuffer.insert(g_rxBuffer.end(), temp, temp + received);
             }
             g_rxCv.notify_all();
         }
-        else if (received < 0)
-        {
-            if (!g_rxRunning)
+        else if (received < 0) {
+            if (g_rxRunning)
                 break;
-            this_thread::sleep_for(chrono::milliseconds(10));
+            this_thread::sleep_for(chrono::milliseconds(5));
         }
     }
+    env->DeleteLocalRef(javaBuffer);
     g_rxRunning = false;
     g_rxCv.notify_all();
 }
 
 /**
- * Ha az alkalmazásnak van engedélye a @param name azonosítójú USB eszköz használatára,
- * akkor kapcsolatot nyit vele, feltérképezi a ki és bemeneti végpontjait,
- * majd ezeket globál változókként eltárolja, az eszköz adatforgalmú interfészét
- * lefoglalja (claim), végül elindíja a folyamatos olvasást külön szálon (usb_reader_thread),
- * s ezzel kapcsolatban az olvasó buffert kiüríti.
+ * If the app has permission for using USB device @param name,
+ * then it opens a connection, maps the in and out endpoints and stores them global,
+ * claims the data interface and starts the continous reading in a different thread (usbReaderThread).
+ * Finally it clears the reading buffer.
  */
 bool usb_open_device(const char* name) {
     usb_close();
@@ -367,9 +376,9 @@ bool usb_open_device(const char* name) {
         "(Landroid/hardware/usb/UsbDevice;)Landroid/hardware/usb/UsbDeviceConnection;",
         device.object());
 
-    if (!connection.isValid()) {
+    if (!connection.isValid())
         return false;
-    }
+
     g_connection = connection;
     g_device = device;
 
@@ -377,107 +386,130 @@ bool usb_open_device(const char* name) {
         usb_close();
         return false;
     }
-
-    //connection.claimInterface(iface, true);
     jboolean ok = connection.callMethod<jboolean>(
         "claimInterface",
         "(Landroid/hardware/usb/UsbInterface;Z)Z",
         g_interface.object(),
         JNI_TRUE);
-    if (ok == JNI_TRUE) {
-        {
-            lock_guard<mutex> lock(g_rxMutex);
-            g_rxBuffer.clear();
-        }
-        g_rxRunning = true;
-        g_rxThread = thread(usb_reader_thread);
-        return true;
+    if (clearJniException() || ok != JNI_TRUE) {
+        usb_close();
+        return false;
     }
-    return false;
+    {
+        lock_guard<mutex> lock(g_rxMutex);
+        g_rxBuffer.clear();
+        g_rxError = false;
+    }
+    g_rxRunning = true;
+    g_rxThread = thread(usbReaderThread);
+    return true;
 }
 
 /**
- * Androidon egy bulk transfer írást hív meg (a szükséges paraméterekkel).
- * @return elküldött byte mennyiség
+ * In Android it calls a bulk transfer write (with the nescessary parameteres).
+ * @return the byte lenght of the sent data
  */
 int usb_write(const char* data, int len, int timeoutMs) {
-    if (!g_connection.isValid() || !g_outEndpoint.isValid())
+    if (!g_connection.isValid() || !g_outEndpoint.isValid() || !data || len < 0)
         return -1;
+    if (len == 0)
+        return 0;
 
     QJniEnvironment env;
-
     jbyteArray arr = env->NewByteArray(len);
+
+    bool jniError = clearJniException();
+    if (jniError || !arr)
+        return -1;
 
     env->SetByteArrayRegion(
         arr,
         0,
         len,
         reinterpret_cast<const jbyte *>(data));
+    if (clearJniException()) {
+        env->DeleteLocalRef(arr);
+        return -1;
+    }
 
-    jint written =
-        g_connection.callMethod<jint>(
-            "bulkTransfer",
-            "(Landroid/hardware/usb/UsbEndpoint;[BII)I",
-            g_outEndpoint.object(),
-            arr,
-            len,
-            timeoutMs);
+    jint written = g_connection.callMethod<jint>(
+        "bulkTransfer",
+        "(Landroid/hardware/usb/UsbEndpoint;[BII)I",
+        g_outEndpoint.object(),
+        arr,
+        len,
+        timeoutMs);
+
+    jniError = clearJniException();
 
     env->DeleteLocalRef(arr);
 
-    return written;
+    return jniError ? -1 : written;
 }
 
 /**
- * Olvasható byte-ok száma az RX bufferből (amely egy dinamikus tömb, vector).
- * Célja, hogy a soros olvasó (pyserial) ez alapján tudja,
- * mennyi byte beolvasandó adat érkezett be a bufferbe.
+ * Number of readable bytes from the RX buffer (dynamic / deque).
+ * The py(android)serial uses to know how much incoming data arrived to the buffer.
 */
-int usb_available()
-{
+int rxBufferAvailable() {
     lock_guard<mutex> lock(g_rxMutex);
     return static_cast<int>(g_rxBuffer.size());
 }
 
+int usb_available() {
+    return rxBufferAvailable();
+}
+
 /**
- * A globál buffer tartalmát olvsassa ki.
- * A kezdetben üres bufferre legfeljebb a megadott időtartalmat vár, mielőtt olvasná (hacsak nem 0-ra van állítva).
- * Ha még az idő előtt a g_rxCv feltéleles változó értesíti (hogy érkezett adat az eddig üres bufferbe),
- * akkor a külső olvasó szálat biztonságosan lezárva (lock) megnézi,
- * hogy a buffer nem üres-e, vagy az olvasó szál nem fut.
- * Ha hamis, akkor tovább vár, különben tovább megy és kimásolja magának a buffert.
+ * It reads the global buffer.
+ * At the begining, the empty buffer wait for at most the given time before reading (except the time set to 0)
+ * If g_rxCv condition variable notifies before the time limit that data arrived to the empty buffer,
+ * then locking the reader thread it wathces wether the buffer is empty or the reader thread stopped.
+ * If it is false, then it keeps waiting, otherwise it moves on and reads the whole buffer.
  * @param buffer
- * @param maxlen
+ * @param maxLen
  * @param timeoutMs
- * @return min(maxlen, g_rxBuffer.size())
+ * @return min(maxLen, g_rxBuffer.size())
  */
-int usb_read(char* buffer, int maxlen, int timeoutMs = 10) {
-    if (buffer == nullptr || maxlen <= 0)
+int rxRead(char* buffer, int maxLen, int timeoutMs = 10) {
+    if (!buffer || maxLen <= 0)
         return -1;
 
-    unique_lock<mutex> lock(g_rxMutex); // timed locking
+    unique_lock<mutex> lock(g_rxMutex);
+    auto ready = [] { return !g_rxBuffer.empty() || g_rxError || !g_rxRunning; };
 
     if (g_rxBuffer.empty()) {
         if (timeoutMs < 0)
-            g_rxCv.wait(lock, [] {return !g_rxBuffer.empty() || !g_rxRunning;});
-        else
-            g_rxCv.wait_for(lock, chrono::milliseconds(timeoutMs), [] {return !g_rxBuffer.empty() || !g_rxRunning;});
+            g_rxCv.wait(lock, ready);
+        else if (!g_rxCv.wait_for(lock, chrono::milliseconds(timeoutMs), ready))
+            return 0;
     }
-    if (g_rxBuffer.empty())
-        return 0;
+    if (g_rxBuffer.empty()) {
+        lock_guard<mutex> lock(g_rxMutex);
+        return g_rxError ? -1 : 0;
+    }
 
-    const int count = min(maxlen, static_cast<int>(g_rxBuffer.size()));
+    const int n = min(maxLen, static_cast<int>(g_rxBuffer.size()));
 
-    copy(g_rxBuffer.begin(), g_rxBuffer.begin() + count, buffer);
+    for (int i = 0; i < n; ++i) {
+        buffer[i] = g_rxBuffer.front();
+        g_rxBuffer.pop_front();
+    }
 
-    g_rxBuffer.erase(g_rxBuffer.begin(),g_rxBuffer.begin() + count);
-
-    return count;
+    return n;
 }
 
-void usb_clear_rx_buffer(){
+int usb_read(char* buffer, int maxLen, int timeoutMs = 10) {
+    return rxRead(buffer, maxLen, timeoutMs);
+}
+
+void clearRxBuffer() {
     lock_guard<mutex> lock(g_rxMutex);
     g_rxBuffer.clear();
+}
+
+void usb_clear_rx_buffer() {
+    clearRxBuffer();
 }
 
 void usb_close() {
@@ -494,10 +526,12 @@ void usb_close() {
                 "(Landroid/hardware/usb/UsbInterface;)Z",
                 g_interface.object());
         }
+        clearJniException();
 
         g_connection.callMethod<void>(
             "close",
             "()V");
+        clearJniException();
     }
     g_interface = QJniObject();
     g_inEndpoint = QJniObject();
