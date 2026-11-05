@@ -45,7 +45,7 @@ def init_android_serial():
     to the custom AndroidSerial class (monkey-patch)."""
     slcan.serial.serial_for_url = android_serial_for_url
 
-def android_search_for_usb_devices() -> list[str]:
+def android_search_for_usb_bt_devices() -> list[str]:
     """List all connected devices (device name)"""
     usb_devices = json.loads(clib.usb_get_all_device_names().decode("utf-8"))
     bt_devices = json.loads(clib.bt_get_paired_devices().decode("utf-8"))
