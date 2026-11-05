@@ -7,7 +7,7 @@ if hasattr(sys, "getandroidapilevel"):
     import can
     slcan.serial.serial_for_url = android_ser.android_serial_for_url # monkey-patch
 
-    available_ports: list[str] = android_ser.android_search_for_usb_devices()
+    available_ports: list[str] = android_ser.android_search_for_usb_bt_devices()
 
     if not available_ports:
         exit()
