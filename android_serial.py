@@ -72,7 +72,10 @@ class AndroidSerial:
         self.timeout = timeout
         self.write_timeout = write_timeout
         self.is_open = False
-        self.handle = clib.usb_open_device(port.encode("utf-8"))
+        self.handle = None
+
+        if not clib.usb_open_device(port.encode("utf-8")):
+            raise OSError("USB device could not be opened")
 
         if not android_usb_permission_granted(port):
             raise PermissionError("Android USB permission has not been granted")
