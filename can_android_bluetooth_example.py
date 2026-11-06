@@ -21,7 +21,7 @@ if hasattr(sys, "getandroidapilevel"):
             exit(1)
 
     # if the android version is 31 or greater, then BLUETOOTH_CONNECT permission is needed from the user
-    if android_ser.android_bluetooth_permission_granted():
+    if not android_ser.android_bluetooth_permission_granted():
         android_ser.android_bluetooth_request_permission()
         time.sleep(5)  # or any interval the user can react
 
