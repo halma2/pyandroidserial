@@ -1,8 +1,7 @@
 import json
-import threading
+from contextlib import contextmanager
 from ctypes import *
 from io import UnsupportedOperation
-from can.interfaces import slcan
 
 clib = CDLL("libpyandroidserial.so")
 clib.usb_host_supported.restype = c_bool
@@ -39,11 +38,6 @@ def android_serial_for_url(url, *args, **kwargs):
 def usb_host_supported_on_android() -> bool:
     """It checks, whether the android device supports USB host"""
     return clib.usb_host_supported()
-
-def init_android_serial():
-    """This function redirects the slcan serial port opening function
-    to the custom AndroidSerial class (monkey-patch)."""
-    slcan.serial.serial_for_url = android_serial_for_url
 
 def android_search_for_usb_bt_devices() -> list[str]:
     """List all connected devices (device name)"""
@@ -119,6 +113,11 @@ class AndroidSerial:
     def reset_input_buffer(self):
         clib.usb_clear_rx_buffer()
 
+    def reset_output_buffer(self):
+        # The OutputStream does not provide general clear.
+        # It should not be assumed that the already sent data can be deleted.
+        pass
+
     def close(self):
         if self.is_open:
             self.is_open = False
@@ -126,12 +125,6 @@ class AndroidSerial:
 
     def fileno(self):
          raise UnsupportedOperation("Android USB device has no POSIX file descriptor")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
 
 
 def is_bluetooth_device(name) -> bool:
@@ -169,13 +162,15 @@ class AndroidBluetoothSerial:
             raise PermissionError("Android Bluetooth permission has not been granted")
 
         mac = get_bt_mac_address(self.port)
-        connect_thread = threading.Thread(target=clib.bt_connect, args=(mac.encode("ascii"),), daemon=True)
+        if not mac:
+            raise ValueError(f"Invalid Bluetooth port: {self.port}")
+            
+        if not clib.bt_connect(mac.encode("ascii")):
+            raise OSError(f"Bluetooth SPP connection error: {mac}")
 
-        if not connect_thread.is_alive():
-            connect_thread.start()
-            connect_thread.join()
-            if not connect_thread.is_alive():
-                raise OSError(f"Bluetooth SPP connection error: {mac}")
+        if not clib.bt_has_connect_permission():
+            raise PermissionError("Android Bluetooth permission has not been granted")
+
 
         self.is_open = True
 
@@ -185,7 +180,7 @@ class AndroidBluetoothSerial:
 
     def read(self, size=1):
         if not self.is_open:
-            raise OSError("A Bluetooth-connection is not open.")
+            raise OSError("Bluetooth is not open.")
 
         if size <= 0:
             return b""
@@ -198,13 +193,13 @@ class AndroidBluetoothSerial:
         count = clib.bt_read(buffer, size, timeout_ms)
 
         if count < 0:
-            raise OSError("Bluetooth-read error.")
+            raise OSError("Bluetooth read error.")
 
         return buffer.raw[:count]
 
     def write(self, data):
         if not self.is_open:
-            raise OSError("A Bluetooth-connection is not open.")
+            raise OSError("Bluetooth is not open.")
 
         data = bytes(data)
         if not data:
@@ -219,7 +214,7 @@ class AndroidBluetoothSerial:
         count = clib.bt_write(data, len(data), timeout_ms)
 
         if count < 0:
-            raise OSError("Bluetooth-write error.")
+            raise OSError("Bluetooth write error.")
 
         return count
 
@@ -230,8 +225,6 @@ class AndroidBluetoothSerial:
         clib.bt_clear_rx_buffer()
 
     def reset_output_buffer(self):
-        # The OutputStream does not provide general clear.
-        # It should not be assumed that the already sent data can be deleted.
         pass
 
     def read_until(self, expected=b"\n", size=None):
@@ -257,13 +250,7 @@ class AndroidBluetoothSerial:
             self.is_open = False
 
     def fileno(self):
-        raise UnsupportedOperation("Android bl device has no POSIX file descriptor.")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+        raise UnsupportedOperation("Android Bluetooth device has no POSIX file descriptor.")
 
 
 def open_serial(
@@ -289,3 +276,11 @@ def open_serial(
         timeout=timeout,
         **kwargs,
     )
+
+@contextmanager
+def android_serial(port): # use: 'with android_serial(args) as serial:'
+    android_ser = open_serial(port)
+    try:
+        yield android_ser
+    finally:
+        android_ser.close()
