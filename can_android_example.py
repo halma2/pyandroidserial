@@ -24,7 +24,7 @@ if hasattr(sys, "getandroidapilevel"):
     android_usb.android_usb_request_permission(selected_port)
     time.sleep(5) # or any interval the user can react
 
-  if android_usb.android_usb_permission_granted(selected_port):
+  if not android_usb.android_usb_permission_granted(selected_port):
     with can.Bus(interface="slcan", channel=selected_port, bitrate=250_000) as bus:
       for _ in range(10):
         msg = can.Message(arbitration_id=0x201, data=[0x40, 0, 0, 0x20, 0, 0, 0, 0], is_extended_id=False) # random message
