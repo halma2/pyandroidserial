@@ -136,7 +136,7 @@ int bt_get_device_class(const char* mac_address) {
         "getBluetoothClass",
         "()Landroid/bluetooth/BluetoothClass;"
         );
-    if (clearJniException() || bluetoothClass.isValid())
+    if (clearJniException() || !bluetoothClass.isValid())
         return 0;
 
     return bluetoothClass.callMethod<jint>(
