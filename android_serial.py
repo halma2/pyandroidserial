@@ -38,15 +38,15 @@ def android_usb_host_supported() -> bool:
 
 def android_search_for_usb_bt_devices() -> list[str]:
     """List all connected devices (device name)"""
-    usb_devices = json.loads(clib.usb_get_all_device_names().decode("utf-8"))
-    bt_devices = json.loads(clib.bt_get_paired_devices().decode("utf-8"))
+    usb_devices = json.loads(clib.usb_get_all_device_names().decode())
+    bt_devices = json.loads(clib.bt_get_paired_devices().decode())
     return usb_devices + bt_devices
 
 def android_usb_permission_granted(name: str) -> bool:
-    return clib.usb_has_permission(name.encode("utf-8")) == 1
+    return clib.usb_has_permission(name.encode()) == 1
 
 def android_usb_request_permission(name: str) -> bool:
-    return clib.usb_request_permission(name.encode("utf-8")) == 1
+    return clib.usb_request_permission(name.encode()) == 1
 
 def android_is_bluetooth_device(port: str) -> bool:
     return port.startswith("bt://")
@@ -61,7 +61,8 @@ def android_get_bt_mac_address(port: str) -> str | None:
     return port[5:] if is_bluetooth_device(port) else None
 
 def android_bluetooth_get_device_class(port: str) -> int:
-    return clib.bt_get_device_class(get_bt_mac_address(port).encode('ascii'))
+    mac = android_get_bt_mac_address(port)
+    return clib.bt_get_device_class(mac.encode()) if mac else None
 
 
 class AndroidSerial(ABC):
@@ -204,7 +205,7 @@ class AndroidBluetoothSerial(AndroidSerial):
         if not mac:
             raise ValueError(f"Invalid Bluetooth port: {self.port}")
 
-        if not clib.bt_connect(mac.encode("ascii")):
+        if not clib.bt_connect(mac.encode()):
             raise OSError(f"Bluetooth SPP connection error: {mac}")
 
         if not clib.bt_has_connect_permission():
