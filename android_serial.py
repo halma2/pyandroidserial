@@ -48,7 +48,7 @@ def android_usb_permission_granted(name: str) -> bool:
 def android_usb_request_permission(name: str) -> bool:
     return clib.usb_request_permission(name.encode("utf-8")) == 1
 
-def is_bluetooth_device(name) -> bool:
+def android_is_bluetooth_device(name) -> bool:
     return name.startswith("bt://")
 
 def android_bluetooth_permission_granted():
@@ -57,7 +57,7 @@ def android_bluetooth_permission_granted():
 def android_bluetooth_request_permission():
     clib.bt_request_connect_permission()
 
-def get_bt_mac_address(port: str) -> str | None:
+def android_get_bt_mac_address(port: str) -> str | None:
     return port[5:] if is_bluetooth_device(port) else None
 
 def android_bluetooth_get_device_class(port: str) -> int:
