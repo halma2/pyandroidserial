@@ -10,6 +10,10 @@ if hasattr(sys, "getandroidapilevel"):
 
   slcan.serial.serial_for_url = android_usb.android_serial_for_url # monkey-patch
 
+  if not android_usb.android_usb_host_supported():
+    print("Usb host is not supported on this Android device.")
+    exit()
+
   available_ports: list[str] = android_usb.android_search_for_usb_bt_devices()
 
   if not available_ports:
