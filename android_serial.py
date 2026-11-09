@@ -32,7 +32,7 @@ def android_serial_for_url(url, *args, **kwargs):
         return AndroidBluetoothSerial(url, *args, **kwargs)
     return AndroidUsbSerial(*args, **kwargs)
 
-def usb_host_supported_on_android() -> bool:
+def android_usb_host_supported() -> bool:
     """It checks, whether the android device supports USB host"""
     return clib.usb_host_supported()
 
