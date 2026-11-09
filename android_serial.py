@@ -160,7 +160,7 @@ class AndroidUsbSerial(AndroidSerial):
                          timeout=timeout, write_timeout=write_timeout, **kwargs)
 
         if not clib.usb_open_device(port.encode("utf-8")):
-            raise OSError("USB device could not be opened")
+            raise OSError("USB device cannot be opened")
 
         if not android_usb_permission_granted(port):
             raise PermissionError("Android USB permission has not been granted")
