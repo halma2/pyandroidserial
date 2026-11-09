@@ -16,7 +16,7 @@ if hasattr(sys, "getandroidapilevel"):
     # the port name of a bluetooth device gets a "bt://" prefix before its mac address
     # this way the library will know which serial (Usb/Bt) class should handle the port address.
     # check whether the Bluetooth device class of the selected port is 0x1F00 (uncategorized, used for UART):
-    if android_ser.is_bluetooth_device(selected_port):
+    if android_ser.android_is_bluetooth_device(selected_port):
         if android_ser.android_bluetooth_get_device_class(selected_port) != int(0x1F00):
             exit(1)
 
